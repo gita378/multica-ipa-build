@@ -72,14 +72,6 @@ jobs:
           echo '--- generated ios/ ---'
           ls -la ios/ | head -40
 
-      - name: Allow plain HTTP (ATS)
-        run: |
-          PLIST=$(find multica/apps/mobile/ios -maxdepth 3 -name Info.plist -not -path '*/Pods/*' | head -1)
-          echo "plist=$PLIST"
-          test -n "$PLIST" || { echo 'NO INFO.PLIST'; exit 1; }
-          python3 -c 'import plistlib,sys;p=sys.argv[1];d=plistlib.load(open(p,"rb"));d.setdefault("NSAppTransportSecurity",{})["NSAllowsArbitraryLoads"]=True;plistlib.dump(d,open(p,"wb"))' "$PLIST"
-          python3 -c 'import plistlib,sys;print("ATS:",plistlib.load(open(sys.argv[1],"rb")).get("NSAppTransportSecurity"))' "$PLIST"
-
       - name: CocoaPods install
         working-directory: multica/apps/mobile/ios
         run: pod install
@@ -128,10 +120,14 @@ jobs:
           path: ${{ runner.temp }}/archive.log
           if-no-files-found: ignore
 
-      - name: Ad-hoc sign and pack IPA
+      - name: Patch finished app, ad-hoc sign and pack IPA
+        env:
+          API_URL: ${{ github.event.inputs.api_url || 'http://192.168.2.200:8080' }}
+          WEB_URL: ${{ github.event.inputs.web_url || 'http://192.168.2.200:3000' }}
         run: |
           APP=$(find "$RUNNER_TEMP/App.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP" || { echo 'NO APP IN ARCHIVE'; exit 1; }
+          python3 -c 'import sys,plistlib,os,json;app=sys.argv[1];cfg=json.loads(sys.argv[2]);jb=os.path.join(app,"main.jsbundle");b=open(jb,"rb").read();n1=b.count(b"https://api.multica.ai");n2=b.count(b"https://multica.ai");b=b.replace(b"https://api.multica.ai",cfg["api"].encode()).replace(b"https://multica.ai",cfg["web"].encode());open(jb,"wb").write(b);print("bundle replaced api=%d web=%d"%(n1,n2));p=os.path.join(app,"Info.plist");d=plistlib.load(open(p,"rb"));d.setdefault("NSAppTransportSecurity",{})["NSAllowsArbitraryLoads"]=True;plistlib.dump(d,open(p,"wb"));print("ATS now:",d["NSAppTransportSecurity"])' "$APP" "{\"api\":\"$API_URL\",\"web\":\"$WEB_URL\"}"
           printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict>' '<key>get-task-allow</key><true/>' '</dict></plist>' > "$RUNNER_TEMP/ent.plist"
           codesign --force --deep --sign - --entitlements "$RUNNER_TEMP/ent.plist" "$APP"
           codesign --verify --deep --strict "$APP"
