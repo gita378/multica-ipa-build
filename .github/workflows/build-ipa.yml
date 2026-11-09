@@ -1,0 +1,111 @@
+name: Build Multica iOS IPA (TrollStore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'multica source ref'
+        required: false
+        default: 'main'
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Multica source
+        uses: actions/checkout@v4
+        with:
+          repository: multica-ai/multica
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          path: multica
+          fetch-depth: 1
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          xcode-select -p
+          node --version || true
+          ruby --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10 --activate
+          pnpm --version
+
+      - name: Install JS deps
+        working-directory: multica
+        run: pnpm install --frozen-lockfile
+
+      - name: Expo prebuild (iOS, production)
+        working-directory: multica/apps/mobile
+        env:
+          APP_ENV: production
+          EXPO_BUNDLE_IDENTIFIER_PROD: com.ja.multica.ipa
+          EXPO_NO_TELEMETRY: '1'
+          CI: '1'
+        run: |
+          pnpm exec expo prebuild -p ios --no-install
+          echo '--- generated ios/ ---'
+          ls -la ios/ | head -40
+
+      - name: Detect workspace and scheme
+        working-directory: multica/apps/mobile/ios
+        run: |
+          WS=$(find . -maxdepth 1 -name '*.xcworkspace' | head -1)
+          echo "WORKSPACE=$WS" >> "$GITHUB_ENV"
+          xcodebuild -list -workspace "$WS" -json > /tmp/list.json
+          cat /tmp/list.json
+          SCHEME=$(python3 -c 'import json;d=json.load(open("/tmp/list.json"));w=d.get("workspace") or d.get("project") or {};s=w.get("schemes") or [];print(s[0] if s else "")')
+          test -n "$SCHEME" || { echo 'NO SCHEME'; exit 1; }
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "scheme=$SCHEME"
+
+      - name: CocoaPods install
+        working-directory: multica/apps/mobile/ios
+        run: pod install
+
+      - name: Archive (unsigned, Release)
+        working-directory: multica/apps/mobile/ios
+        run: |
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/archive.log
+          if-no-files-found: ignore
+
+      - name: Ad-hoc sign and pack IPA
+        run: |
+          APP=$(find "$RUNNER_TEMP/App.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
+          test -n "$APP" || { echo 'NO APP IN ARCHIVE'; exit 1; }
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict>' '<key>get-task-allow</key><true/>' '</dict></plist>' > "$RUNNER_TEMP/ent.plist"
+          codesign --force --deep --sign - --entitlements "$RUNNER_TEMP/ent.plist" "$APP"
+          codesign --verify --deep --strict "$APP"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qr "$RUNNER_TEMP/App.ipa" Payload)
+          ls -lh "$RUNNER_TEMP/App.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: multica-ipa
+          path: ${{ runner.temp }}/App.ipa
+          if-no-files-found: error
