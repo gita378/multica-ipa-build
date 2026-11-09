@@ -7,8 +7,6 @@ on:
         description: 'multica source ref'
         required: false
         default: 'main'
-  push:
-    branches: [main]
 
 jobs:
   build:
@@ -56,26 +54,32 @@ jobs:
           echo '--- generated ios/ ---'
           ls -la ios/ | head -40
 
-      - name: Detect workspace and scheme
+      - name: CocoaPods install
+        working-directory: multica/apps/mobile/ios
+        run: pod install
+
+      - name: Detect xcode target and scheme
         working-directory: multica/apps/mobile/ios
         run: |
           WS=$(find . -maxdepth 1 -name '*.xcworkspace' | head -1)
-          echo "WORKSPACE=$WS" >> "$GITHUB_ENV"
-          xcodebuild -list -workspace "$WS" -json > /tmp/list.json
+          PROJ=$(find . -maxdepth 1 -name '*.xcodeproj' | head -1)
+          if [ -n "$WS" ]; then
+            echo "XCODE_ARGS=-workspace $WS" >> "$GITHUB_ENV"
+            xcodebuild -list -workspace "$WS" -json > /tmp/list.json
+          else
+            echo "XCODE_ARGS=-project $PROJ" >> "$GITHUB_ENV"
+            xcodebuild -list -project "$PROJ" -json > /tmp/list.json
+          fi
           cat /tmp/list.json
           SCHEME=$(python3 -c 'import json;d=json.load(open("/tmp/list.json"));w=d.get("workspace") or d.get("project") or {};s=w.get("schemes") or [];print(s[0] if s else "")')
           test -n "$SCHEME" || { echo 'NO SCHEME'; exit 1; }
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
           echo "scheme=$SCHEME"
 
-      - name: CocoaPods install
-        working-directory: multica/apps/mobile/ios
-        run: pod install
-
       - name: Archive (unsigned, Release)
         working-directory: multica/apps/mobile/ios
         run: |
-          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+          xcodebuild $XCODE_ARGS -scheme "$SCHEME" \
             -configuration Release -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
