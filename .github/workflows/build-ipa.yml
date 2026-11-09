@@ -7,6 +7,14 @@ on:
         description: 'multica source ref'
         required: false
         default: 'main'
+      api_url:
+        description: 'self-hosted API base URL'
+        required: false
+        default: 'http://192.168.2.200:8080'
+      web_url:
+        description: 'self-hosted web URL'
+        required: false
+        default: 'http://192.168.2.200:3000'
 
 jobs:
   build:
@@ -42,10 +50,20 @@ jobs:
         working-directory: multica
         run: pnpm install --frozen-lockfile
 
+      - name: Point app at self-hosted backend
+        env:
+          API_URL: ${{ github.event.inputs.api_url || 'http://192.168.2.200:8080' }}
+          WEB_URL: ${{ github.event.inputs.web_url || 'http://192.168.2.200:3000' }}
+        run: |
+          printf 'EXPO_PUBLIC_API_URL=%s\nEXPO_PUBLIC_WEB_URL=%s\n' "$API_URL" "$WEB_URL" > multica/apps/mobile/.env.production
+          cat multica/apps/mobile/.env.production
+
       - name: Expo prebuild (iOS, production)
         working-directory: multica/apps/mobile
         env:
           APP_ENV: production
+          EXPO_PUBLIC_API_URL: ${{ github.event.inputs.api_url || 'http://192.168.2.200:8080' }}
+          EXPO_PUBLIC_WEB_URL: ${{ github.event.inputs.web_url || 'http://192.168.2.200:3000' }}
           EXPO_BUNDLE_IDENTIFIER_PROD: com.ja.multica.ipa
           EXPO_NO_TELEMETRY: '1'
           CI: '1'
@@ -53,6 +71,14 @@ jobs:
           pnpm exec expo prebuild -p ios --no-install
           echo '--- generated ios/ ---'
           ls -la ios/ | head -40
+
+      - name: Allow plain HTTP (ATS)
+        run: |
+          PLIST=$(find multica/apps/mobile/ios -maxdepth 3 -name Info.plist -not -path '*/Pods/*' | head -1)
+          echo "plist=$PLIST"
+          test -n "$PLIST" || { echo 'NO INFO.PLIST'; exit 1; }
+          python3 -c 'import plistlib,sys;p=sys.argv[1];d=plistlib.load(open(p,"rb"));d.setdefault("NSAppTransportSecurity",{})["NSAllowsArbitraryLoads"]=True;plistlib.dump(d,open(p,"wb"))' "$PLIST"
+          python3 -c 'import plistlib,sys;print("ATS:",plistlib.load(open(sys.argv[1],"rb")).get("NSAppTransportSecurity"))' "$PLIST"
 
       - name: CocoaPods install
         working-directory: multica/apps/mobile/ios
@@ -78,6 +104,9 @@ jobs:
 
       - name: Archive (unsigned, Release)
         working-directory: multica/apps/mobile/ios
+        env:
+          EXPO_PUBLIC_API_URL: ${{ github.event.inputs.api_url || 'http://192.168.2.200:8080' }}
+          EXPO_PUBLIC_WEB_URL: ${{ github.event.inputs.web_url || 'http://192.168.2.200:3000' }}
         run: |
           set -o pipefail
           xcodebuild $XCODE_ARGS -scheme "$SCHEME" \
