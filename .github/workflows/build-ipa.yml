@@ -71,7 +71,7 @@ jobs:
             xcodebuild -list -project "$PROJ" -json > /tmp/list.json
           fi
           cat /tmp/list.json
-          SCHEME=$(python3 -c 'import json;d=json.load(open("/tmp/list.json"));w=d.get("workspace") or d.get("project") or {};s=w.get("schemes") or [];print(s[0] if s else "")')
+          SCHEME=$(python3 -c 'import json,os,re;d=json.load(open("/tmp/list.json"));w=d.get("workspace") or d.get("project") or {};s=w.get("schemes") or [];b=next((p[:-10] for p in os.listdir(".") if p.endswith(".xcodeproj")),"");c=[x for x in s if x==b] or [x for x in s if "Multica" in x] or [x for x in s if not re.match(r"(?i)(pods|boost|react|flipper|yoga|fmt|glog|double|socket|hermes|RCT)",x)] or s;print(c[0] if c else "")')
           test -n "$SCHEME" || { echo 'NO SCHEME'; exit 1; }
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
           echo "scheme=$SCHEME"
@@ -79,6 +79,7 @@ jobs:
       - name: Archive (unsigned, Release)
         working-directory: multica/apps/mobile/ios
         run: |
+          set -o pipefail
           xcodebuild $XCODE_ARGS -scheme "$SCHEME" \
             -configuration Release -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -86,6 +87,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
             EXPANDED_CODE_SIGN_IDENTITY="" \
             archive 2>&1 | tee "$RUNNER_TEMP/archive.log"
+          echo '--- archive products ---'
+          ls -la "$RUNNER_TEMP/App.xcarchive/Products/" || true
+          test -d "$RUNNER_TEMP/App.xcarchive/Products/Applications" || { echo 'NO APPLICATIONS DIR'; exit 1; }
 
       - name: Upload build log
         if: always()
