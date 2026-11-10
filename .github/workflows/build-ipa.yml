@@ -58,6 +58,11 @@ jobs:
           printf 'EXPO_PUBLIC_API_URL=%s\nEXPO_PUBLIC_WEB_URL=%s\n' "$API_URL" "$WEB_URL" > multica/apps/mobile/.env.production
           cat multica/apps/mobile/.env.production
 
+      - name: Patch bootstrap spinner guard
+        run: |
+          python3 -c 'import sys;p=sys.argv[1];s=open(p).read();a="import { ActivityIndicator, View } from \"react-native\";";b="import { useEffect } from \"react\";\n"+a;s=s.replace(a,b,1);c="export default function Index() {";d=c+"\n  useEffect(() => {\n    const t = setTimeout(() => { if (useAuthStore.getState().isLoading) useAuthStore.setState({ isLoading: false }); }, 6000);\n    return () => clearTimeout(t);\n  }, []);";s=s.replace(c,d,1);open(p,"w").write(s)' multica/apps/mobile/app/index.tsx
+          grep -n "setTimeout" multica/apps/mobile/app/index.tsx
+
       - name: Expo prebuild (iOS, production)
         working-directory: multica/apps/mobile
         env:
@@ -128,7 +133,7 @@ jobs:
           APP=$(find "$RUNNER_TEMP/App.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP" || { echo 'NO APP IN ARCHIVE'; exit 1; }
           python3 -c 'import sys,plistlib,os,json;app=sys.argv[1];cfg=json.loads(sys.argv[2]);jb=os.path.join(app,"main.jsbundle");b=open(jb,"rb").read();n1=b.count(b"https://api.multica.ai");n2=b.count(b"https://multica.ai");b=b.replace(b"https://api.multica.ai",cfg["api"].encode()).replace(b"https://multica.ai",cfg["web"].encode());open(jb,"wb").write(b);print("bundle replaced api=%d web=%d"%(n1,n2));p=os.path.join(app,"Info.plist");d=plistlib.load(open(p,"rb"));d.setdefault("NSAppTransportSecurity",{})["NSAllowsArbitraryLoads"]=True;plistlib.dump(d,open(p,"wb"));print("ATS now:",d["NSAppTransportSecurity"])' "$APP" "{\"api\":\"$API_URL\",\"web\":\"$WEB_URL\"}"
-          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict>' '<key>get-task-allow</key><true/>' '</dict></plist>' > "$RUNNER_TEMP/ent.plist"
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict>' '<key>get-task-allow</key><true/>' '<key>keychain-access-groups</key>' '<array><string>com.ja.multica.ipa</string></array>' '</dict></plist>' > "$RUNNER_TEMP/ent.plist"
           codesign --force --deep --sign - --entitlements "$RUNNER_TEMP/ent.plist" "$APP"
           codesign --verify --deep --strict "$APP"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
